@@ -1,4 +1,5 @@
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
+require('dotenv').config();
+const { default: makeWASocket, useMultiFileAuthState } = require('@whiskeysockets/baileys');
 const Pino = require('pino');
 const express = require('express');
 const QRCode = require('qrcode');
@@ -6,43 +7,31 @@ const path = require('path');
 const fs = require('fs');
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 
 // ============ CONFIG ============
 const BOT_NAME = 'Muzammil MD';
 const OWNER_NUMBER = '923039107958';
 const ADMIN_NUMBER = '923039107958';
 const PREFIX = '.';
-const SESSION_FILE = 'session.json';
 
 let botStatus = 'Disconnected';
 let qrCode = null;
 let sock = null;
-let botMode = 'public'; // public / private
+let botMode = 'public';
 let isConnected = false;
 let pairingCode = null;
 
-// ============ SERVE HTML ============
+// ============ SERVER ============
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(express.json());
 
-// ============ API ENDPOINTS ============
 app.get('/status', (req, res) => {
-    res.json({
-        status: botStatus,
-        connected: isConnected,
-        mode: botMode,
-        botName: BOT_NAME,
-        owner: OWNER_NUMBER
-    });
+    res.json({ status: botStatus, connected: isConnected, mode: botMode });
 });
 
 app.get('/qr', (req, res) => {
-    res.json({
-        qr: qrCode,
-        connected: isConnected,
-        pairingCode: pairingCode
-    });
+    res.json({ qr: qrCode, connected: isConnected, pairingCode: pairingCode });
 });
 
 app.post('/setmode', (req, res) => {
@@ -50,7 +39,6 @@ app.post('/setmode', (req, res) => {
     if (mode === 'public' || mode === 'private') {
         botMode = mode;
         res.json({ success: true, mode: botMode });
-        console.log(`📌 Mode changed to: ${botMode}`);
     } else {
         res.json({ success: false, error: 'Invalid mode' });
     }
@@ -58,19 +46,11 @@ app.post('/setmode', (req, res) => {
 
 app.post('/pair', async (req, res) => {
     const { phone } = req.body;
-    if (!phone) {
-        return res.json({ success: false, error: 'Phone number required' });
-    }
-    
+    if (!phone) return res.json({ success: false, error: 'Phone required' });
     try {
-        if (!sock) {
-            return res.json({ success: false, error: 'Bot not ready' });
-        }
-        
         const code = await sock.requestPairingCode(phone);
         pairingCode = code;
         res.json({ success: true, code: code });
-        console.log(`📱 Pairing code sent to ${phone}: ${code}`);
     } catch (error) {
         res.json({ success: false, error: error.message });
     }
@@ -78,40 +58,38 @@ app.post('/pair', async (req, res) => {
 
 app.post('/logout', (req, res) => {
     try {
-        if (sock) {
-            sock.end();
-            sock = null;
-        }
-        if (fs.existsSync(SESSION_FILE)) {
-            fs.unlinkSync(SESSION_FILE);
-        }
+        if (sock) sock.end();
+        if (fs.existsSync('session')) fs.rmSync('session', { recursive: true, force: true });
         isConnected = false;
         botStatus = 'Disconnected';
         qrCode = null;
-        pairingCode = null;
         res.json({ success: true });
-        console.log('👋 Logged out successfully');
     } catch (error) {
         res.json({ success: false, error: error.message });
     }
 });
 
-// ============ START SERVER ============
-app.listen(PORT, () => {
-    console.log(`🌐 Server: http://localhost:${PORT}`);
-    console.log(`🤖 ${BOT_NAME} is starting...`);
+app.listen(PORT, '0.0.0.0', () => {
+    console.log(`🌐 Server: http://0.0.0.0:${PORT}`);
 });
 
 // ============ WHATSAPP BOT ============
 async function startBot() {
     try {
+        if (fs.existsSync('session')) {
+            fs.rmSync('session', { recursive: true, force: true });
+        }
+
         const { state, saveCreds } = await useMultiFileAuthState('session');
         
         sock = makeWASocket({
             logger: Pino({ level: 'silent' }),
             auth: state,
             printQRInTerminal: false,
-            browser: ['Muzammil MD', 'Chrome', '1.0.0']
+            browser: ['Muzammil MD', 'Chrome', '1.0.0'],
+            connectTimeoutMs: 30000,
+            defaultQueryTimeoutMs: 30000,
+            keepAliveIntervalMs: 30000
         });
 
         sock.ev.on('connection.update', async (update) => {
@@ -129,9 +107,7 @@ async function startBot() {
                 qrCode = null;
                 pairingCode = null;
                 console.log(`✅ ${BOT_NAME} Connected!`);
-                console.log(`👤 Logged in as: ${sock.user?.name}`);
-                console.log(`📌 Mode: ${botMode}`);
-                console.log(`👑 Owner: ${OWNER_NUMBER}`);
+                console.log(`👤 ${sock.user?.name}`);
             }
             
             if (connection === 'close') {
@@ -140,9 +116,8 @@ async function startBot() {
                 const statusCode = lastDisconnect?.error?.output?.statusCode;
                 if (statusCode === 401) {
                     console.log('❌ Session expired');
-                    if (fs.existsSync(SESSION_FILE)) {
-                        fs.unlinkSync(SESSION_FILE);
-                    }
+                    if (fs.existsSync('session')) fs.rmSync('session', { recursive: true, force: true });
+                    setTimeout(() => process.exit(0), 2000);
                 } else {
                     console.log('🔄 Reconnecting...');
                     setTimeout(startBot, 5000);
@@ -159,170 +134,93 @@ async function startBot() {
 
             const from = msg.key.remoteJid;
             const sender = msg.key.participant || from;
-            const isGroup = from.endsWith('@g.us');
             
             let text = msg.message?.conversation || 
                       msg.message?.extendedTextMessage?.text || '';
 
-            // ============ CHECK PERMISSION ============
-            const isOwner = sender === OWNER_NUMBER + '@s.whatsapp.net' || 
-                           sender === ADMIN_NUMBER + '@s.whatsapp.net';
+            const isOwner = sender === OWNER_NUMBER + '@s.whatsapp.net';
             
-            // ============ PRIVATE MODE ============
+            // Private Mode
             if (botMode === 'private' && !isOwner) {
-                // Only owner and admin can use bot
                 await sock.sendMessage(from, {
-                    text: `🔒 *${BOT_NAME} is in Private Mode*\n\nOnly Owner/Admin can use this bot.\nContact: wa.me/${OWNER_NUMBER}`
+                    text: `🔒 Private Mode\nOnly Owner can use.\nContact: wa.me/${OWNER_NUMBER}`
                 });
                 return;
             }
 
-            // ============ COMMANDS ============
             if (text.startsWith(PREFIX)) {
                 const args = text.slice(PREFIX.length).trim().split(/ +/);
                 const command = args.shift().toLowerCase();
 
-                // ====== PING ======
                 if (command === 'ping') {
-                    await sock.sendMessage(from, {
-                        text: `🏓 *Pong!*\n\n📌 ${BOT_NAME}\n⏱️ Connected`
-                    });
+                    await sock.sendMessage(from, { text: '🏓 Pong!' });
                 }
-
-                // ====== INFO ======
                 else if (command === 'info') {
                     await sock.sendMessage(from, {
-                        text: `🤖 *${BOT_NAME}*\n\n` +
-                              `📌 Version: 2.0.0\n` +
-                              `👑 Owner: ${OWNER_NUMBER}\n` +
-                              `📱 Admin: ${ADMIN_NUMBER}\n` +
-                              `📊 Mode: ${botMode.toUpperCase()}\n` +
-                              `📡 Status: Online\n\n` +
-                              `🛠️ *Commands*\n` +
-                              `${PREFIX}ping - Check bot\n` +
-                              `${PREFIX}info - Bot info\n` +
-                              `${PREFIX}mode - Check mode\n` +
-                              `${PREFIX}owner - Contact owner\n\n` +
-                              `✍️ *Prowed By: Wasif Ali*`
+                        text: `🤖 *${BOT_NAME}*\n👑 Owner: ${OWNER_NUMBER}\n📊 Mode: ${botMode.toUpperCase()}\n✍️ Prowed By: Wasif Ali`
                     });
                 }
-
-                // ====== MODE ======
                 else if (command === 'mode') {
-                    if (!isOwner) {
-                        await sock.sendMessage(from, {
-                            text: `❌ Only owner can check mode!`
-                        });
-                        return;
-                    }
-                    await sock.sendMessage(from, {
-                        text: `📌 *Current Mode*\n\n🔹 ${botMode.toUpperCase()}\n\n${botMode === 'public' ? '🌍 Everyone can use' : '🔒 Only Owner/Admin'}`
-                    });
+                    await sock.sendMessage(from, { text: `📌 Mode: ${botMode.toUpperCase()}` });
                 }
-
-                // ====== SET MODE ======
                 else if (command === 'setmode') {
                     if (!isOwner) {
-                        await sock.sendMessage(from, {
-                            text: `❌ Only owner can change mode!`
-                        });
+                        await sock.sendMessage(from, { text: '❌ Only owner!' });
                         return;
                     }
-                    
-                    if (args.length === 0) {
-                        await sock.sendMessage(from, {
-                            text: `❌ Usage: ${PREFIX}setmode public/private`
-                        });
-                        return;
-                    }
-                    
-                    const mode = args[0].toLowerCase();
+                    const mode = args[0]?.toLowerCase();
                     if (mode === 'public' || mode === 'private') {
                         botMode = mode;
-                        await sock.sendMessage(from, {
-                            text: `✅ Mode changed to: *${mode.toUpperCase()}*`
-                        });
-                        console.log(`📌 Mode changed to: ${mode}`);
+                        await sock.sendMessage(from, { text: `✅ Mode: ${mode.toUpperCase()}` });
                     } else {
-                        await sock.sendMessage(from, {
-                            text: `❌ Invalid mode! Use: public or private`
-                        });
+                        await sock.sendMessage(from, { text: '❌ Use: public/private' });
                     }
                 }
-
-                // ====== OWNER ======
                 else if (command === 'owner') {
                     await sock.sendMessage(from, {
-                        text: `👑 *Owner*\n\n📱 ${OWNER_NUMBER}\n💬 Contact: wa.me/${OWNER_NUMBER}\n\n✍️ *Prowed By: Wasif Ali*`
+                        text: `👑 Owner\n📱 ${OWNER_NUMBER}\n💬 wa.me/${OWNER_NUMBER}\n✍️ Prowed By: Wasif Ali`
                     });
                 }
-
-                // ====== HELP ======
                 else if (command === 'help') {
-                    let helpText = `🤖 *${BOT_NAME}* - Help Menu\n\n`;
-                    helpText += `📌 *Commands*\n`;
-                    helpText += `${PREFIX}ping - Check bot response\n`;
-                    helpText += `${PREFIX}info - Bot information\n`;
-                    helpText += `${PREFIX}mode - Check current mode\n`;
-                    helpText += `${PREFIX}owner - Contact owner\n`;
-                    helpText += `${PREFIX}help - Show this menu\n\n`;
-                    
+                    let help = `🤖 *${BOT_NAME}*\n\n`;
+                    help += `${PREFIX}ping - Check bot\n`;
+                    help += `${PREFIX}info - Bot info\n`;
+                    help += `${PREFIX}mode - Check mode\n`;
+                    help += `${PREFIX}owner - Contact owner\n`;
+                    help += `${PREFIX}help - This menu\n`;
                     if (isOwner) {
-                        helpText += `👑 *Owner Commands*\n`;
-                        helpText += `${PREFIX}setmode public/private - Change mode\n`;
-                        helpText += `${PREFIX}restart - Restart bot\n`;
+                        help += `\n👑 Owner:\n${PREFIX}setmode public/private\n${PREFIX}restart`;
                     }
-                    
-                    helpText += `\n✍️ *Prowed By: Wasif Ali*`;
-                    
-                    await sock.sendMessage(from, { text: helpText });
+                    help += `\n\n✍️ Prowed By: Wasif Ali`;
+                    await sock.sendMessage(from, { text: help });
                 }
-
-                // ====== RESTART ======
                 else if (command === 'restart') {
                     if (!isOwner) {
-                        await sock.sendMessage(from, {
-                            text: `❌ Only owner can restart!`
-                        });
+                        await sock.sendMessage(from, { text: '❌ Only owner!' });
                         return;
                     }
-                    await sock.sendMessage(from, {
-                        text: `🔄 Restarting ${BOT_NAME}...`
-                    });
-                    console.log('🔄 Restarting...');
+                    await sock.sendMessage(from, { text: '🔄 Restarting...' });
                     setTimeout(() => process.exit(0), 2000);
                 }
-
-                // ====== UNKNOWN ======
                 else {
                     await sock.sendMessage(from, {
-                        text: `❌ Unknown command!\nUse ${PREFIX}help for commands.`
+                        text: `❌ Unknown! Use ${PREFIX}help`
                     });
                 }
             }
         });
 
     } catch (error) {
-        console.error('❌ Bot Error:', error);
+        console.error('❌ Error:', error);
         setTimeout(startBot, 5000);
     }
 }
 
-// ============ START BOT ============
+console.log(`🤖 ${BOT_NAME}`);
+console.log(`👑 Owner: ${OWNER_NUMBER}`);
+console.log(`📌 Mode: ${botMode}`);
+
 startBot();
 
-// ============ PROCESS HANDLERS ============
-process.on('unhandledRejection', (error) => {
-    console.error('Unhandled Rejection:', error);
-});
-
-process.on('SIGINT', () => {
-    console.log('🛑 Bot stopped');
-    process.exit(0);
-});
-
-console.log(`🤖 ${BOT_NAME} is running...`);
-console.log(`👑 Owner: ${OWNER_NUMBER}`);
-console.log(`📱 Admin: ${ADMIN_NUMBER}`);
-console.log(`📌 Mode: ${botMode}`);
-console.log(`🌐 Open http://localhost:${PORT}`);
+process.on('unhandledRejection', (error) => console.error(error));
+process.on('SIGTERM', () => process.exit(0));
