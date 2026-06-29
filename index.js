@@ -7,11 +7,11 @@ const PORT = process.env.PORT || 3000;
 
 let sock = null;
 let isConnected = false;
+let isPairingReady = false;
 let botName = 'Muzammil MD';
 let ownerNumber = '923039107958';
 
 app.use(express.json());
-app.use(express.static('public'));
 
 // ============ HTML PAGE ============
 app.get('/', (req, res) => {
@@ -54,10 +54,7 @@ app.get('/', (req, res) => {
             padding: 15px;
             margin-bottom: 20px;
         }
-        .status-text {
-            color: #fff;
-            font-size: 16px;
-        }
+        .status-text { color: #fff; font-size: 16px; }
         .status-dot {
             display: inline-block;
             width: 12px;
@@ -79,15 +76,8 @@ app.get('/', (req, res) => {
             padding: 25px;
             border: 1px solid rgba(255,255,255,0.05);
         }
-        .pair-box h3 {
-            color: #fff;
-            font-size: 16px;
-            margin-bottom: 15px;
-        }
-        .input-group {
-            display: flex;
-            gap: 10px;
-        }
+        .pair-box h3 { color: #fff; font-size: 16px; margin-bottom: 15px; }
+        .input-group { display: flex; gap: 10px; }
         .input-group input {
             flex: 1;
             padding: 14px 18px;
@@ -103,9 +93,7 @@ app.get('/', (req, res) => {
             border-color: #4fc3f7;
             background: rgba(255,255,255,0.1);
         }
-        .input-group input::placeholder {
-            color: #666;
-        }
+        .input-group input::placeholder { color: #666; }
         .btn {
             padding: 14px 30px;
             border: none;
@@ -136,9 +124,6 @@ app.get('/', (req, res) => {
             transform: translateY(-2px);
             box-shadow: 0 5px 20px rgba(239,83,80,0.3);
         }
-        .btn-success {
-            background: linear-gradient(135deg, #66bb6a, #388e3c);
-        }
         .code-display {
             background: rgba(255,255,255,0.1);
             border-radius: 12px;
@@ -151,14 +136,8 @@ app.get('/', (req, res) => {
             display: none;
         }
         .code-display.show { display: block; }
-        .btn-group {
-            display: flex;
-            gap: 10px;
-            margin-top: 15px;
-        }
-        .btn-group .btn {
-            flex: 1;
-        }
+        .btn-group { display: flex; gap: 10px; margin-top: 15px; }
+        .btn-group .btn { flex: 1; }
         .footer {
             margin-top: 25px;
             padding-top: 20px;
@@ -255,9 +234,18 @@ app.get('/', (req, res) => {
             if (data.connected) {
                 statusText.textContent = '✅ Connected';
                 statusDot.className = 'status-dot online';
+            } else if (data.ready) {
+                statusText.textContent = '⏳ Ready to Pair';
+                statusDot.className = 'status-dot connecting';
             } else {
                 statusText.textContent = '⛔ Disconnected';
                 statusDot.className = 'status-dot offline';
+            }
+            if (data.code) {
+                pairCode.textContent = data.code;
+                codeDisplay.className = 'code-display show';
+            } else {
+                codeDisplay.className = 'code-display';
             }
         }
 
@@ -266,25 +254,14 @@ app.get('/', (req, res) => {
                 const res = await fetch('/status');
                 const data = await res.json();
                 updateStatus(data);
-                if (data.code) {
-                    pairCode.textContent = data.code;
-                    codeDisplay.className = 'code-display show';
-                } else {
-                    codeDisplay.className = 'code-display';
-                }
-            } catch (e) {
-                console.error(e);
-            }
+            } catch (e) { console.error(e); }
         }
 
         async function pairNumber() {
             const phone = phoneInput.value.trim();
-            if (!phone) {
-                showToast('Please enter phone number!', 'error');
-                return;
-            }
+            if (!phone) { showToast('Enter phone number!', 'error'); return; }
             if (!/^[0-9]{10,15}$/.test(phone)) {
-                showToast('Invalid number! Use: 923001234567', 'error');
+                showToast('Invalid! Use: 923001234567', 'error');
                 return;
             }
             pairBtn.disabled = true;
@@ -321,9 +298,7 @@ app.get('/', (req, res) => {
                     showToast('✅ Logged out', 'success');
                     setTimeout(() => location.reload(), 1000);
                 }
-            } catch (e) {
-                showToast('❌ Error logging out', 'error');
-            }
+            } catch (e) { showToast('❌ Error logging out', 'error'); }
         }
 
         pairBtn.addEventListener('click', pairNumber);
@@ -342,7 +317,11 @@ app.get('/', (req, res) => {
 
 // ============ API ============
 app.get('/status', (req, res) => {
-    res.json({ connected: isConnected });
+    res.json({ 
+        connected: isConnected, 
+        ready: isPairingReady,
+        code: null 
+    });
 });
 
 app.post('/pair', async (req, res) => {
@@ -351,15 +330,15 @@ app.post('/pair', async (req, res) => {
         return res.json({ success: false, error: 'Phone number required' });
     }
     try {
-        if (!sock) {
-            return res.json({ success: false, error: 'Bot is starting...' });
+        if (!sock || !isPairingReady) {
+            return res.json({ success: false, error: 'Bot is connecting... Wait 10 seconds' });
         }
         const code = await sock.requestPairingCode(phone);
         console.log(`📱 Pairing code sent to ${phone}: ${code}`);
         res.json({ success: true, code: code });
     } catch (error) {
         console.error('Pair error:', error);
-        res.json({ success: false, error: error.message || 'Pairing failed' });
+        res.json({ success: false, error: 'Connection error. Try again.' });
     }
 });
 
@@ -367,6 +346,7 @@ app.post('/logout', (req, res) => {
     try {
         if (sock) sock.end();
         isConnected = false;
+        isPairingReady = false;
         sock = null;
         res.json({ success: true });
         console.log('👋 Logged out');
@@ -393,13 +373,17 @@ async function startBot() {
 
         sock.ev.on('connection.update', async (update) => {
             const { connection, lastDisconnect } = update;
+            
             if (connection === 'open') {
                 isConnected = true;
+                isPairingReady = true;
                 console.log(`✅ ${botName} Connected!`);
                 console.log(`👤 ${sock.user?.name}`);
             }
+            
             if (connection === 'close') {
                 isConnected = false;
+                isPairingReady = false;
                 const statusCode = lastDisconnect?.error?.output?.statusCode;
                 if (statusCode === 401) {
                     console.log('❌ Session expired');
