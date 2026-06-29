@@ -1,5 +1,5 @@
 const express = require('express');
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState } = require('@whiskeysockets/baileys');
 const Pino = require('pino');
 
 const app = express();
@@ -9,9 +9,7 @@ let sock = null;
 let isReady = false;
 let isConnected = false;
 
-// ============ MIDDLEWARE ============
 app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
 
 // ============ HTML PAGE ============
 app.get('/', (req, res) => {
@@ -52,11 +50,10 @@ app.get('/', (req, res) => {
         .btn-group .btn{flex:1}
         .footer{margin-top:25px;padding-top:20px;border-top:1px solid rgba(255,255,255,0.05);color:#666;font-size:13px}
         .footer .pro{color:#ffd54f;font-weight:600}
-        .toast{position:fixed;bottom:30px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.9);color:#fff;padding:12px 30px;border-radius:50px;font-size:14px;display:none;z-index:1000;backdrop-filter:blur(10px)}
-        .toast.show{display:block;animation:slideUp 0.3s ease}
+        .toast{position:fixed;bottom:30px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.9);color:#fff;padding:12px 30px;border-radius:50px;font-size:14px;display:none;z-index:1000}
+        .toast.show{display:block}
         .toast.success{border:1px solid #4caf50}
         .toast.error{border:1px solid #f44336}
-        @keyframes slideUp{from{opacity:0;transform:translateX(-50%) translateY(20px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}
         @media(max-width:480px){.container{padding:25px}.input-group{flex-direction:column}.btn-group{flex-direction:column}}
     </style>
 </head>
@@ -74,13 +71,13 @@ app.get('/', (req, res) => {
             <h3>📱 Login with Phone Number</h3>
             <div class="input-group">
                 <input type="text" id="phone" placeholder="923001234567">
-                <button class="btn btn-primary" id="pairBtn">Pair</button>
+                <button class="btn btn-primary" id="pairBtn" type="button">Pair</button>
             </div>
             <div class="code" id="codeBox">Code: <span id="codeText">123456</span></div>
         </div>
         
         <div class="btn-group">
-            <button class="btn btn-danger" id="logoutBtn">🚪 Logout</button>
+            <button class="btn btn-danger" id="logoutBtn" type="button">🚪 Logout</button>
         </div>
         
         <div class="footer">✍️ <span class="pro">Prowed By: Wasif Ali</span></div>
@@ -89,6 +86,7 @@ app.get('/', (req, res) => {
     <div class="toast" id="toast"></div>
 
     <script>
+        // ============ DOM Elements ============
         const dot = document.getElementById('dot');
         const statusEl = document.getElementById('status');
         const phone = document.getElementById('phone');
@@ -99,6 +97,7 @@ app.get('/', (req, res) => {
         const toast = document.getElementById('toast');
         let toastTimeout = null;
 
+        // ============ Toast ============
         function showToast(msg, type = 'success') {
             toast.textContent = msg;
             toast.className = 'toast show ' + type;
@@ -108,7 +107,9 @@ app.get('/', (req, res) => {
             }, 4000);
         }
 
+        // ============ Update Status ============
         function updateStatus(data) {
+            console.log('Status:', data);
             if (data.connected) {
                 statusEl.textContent = '✅ Connected';
                 dot.className = 'dot online';
@@ -130,6 +131,7 @@ app.get('/', (req, res) => {
             }
         }
 
+        // ============ Fetch Status ============
         async function fetchStatus() {
             try {
                 const res = await fetch('/status');
@@ -140,8 +142,12 @@ app.get('/', (req, res) => {
             }
         }
 
+        // ============ Pair Function ============
         async function pairNumber() {
+            console.log('Pair button clicked!');
             const num = phone.value.trim();
+            console.log('Phone number:', num);
+            
             if (!num) {
                 showToast('Please enter phone number!', 'error');
                 return;
@@ -155,7 +161,7 @@ app.get('/', (req, res) => {
             pairBtn.textContent = '⏳ Sending...';
             
             try {
-                console.log('Sending pair request for:', num);
+                console.log('Sending pair request...');
                 const res = await fetch('/pair', {
                     method: 'POST',
                     headers: {
@@ -165,7 +171,7 @@ app.get('/', (req, res) => {
                 });
                 
                 const data = await res.json();
-                console.log('Pair response:', data);
+                console.log('Response:', data);
                 
                 if (data.success) {
                     showToast('✅ Code sent! Check WhatsApp', 'success');
@@ -185,6 +191,7 @@ app.get('/', (req, res) => {
             pairBtn.textContent = 'Pair';
         }
 
+        // ============ Logout ============
         async function logout() {
             if (!confirm('Logout?')) return;
             try {
@@ -199,14 +206,19 @@ app.get('/', (req, res) => {
             }
         }
 
-        pairBtn.onclick = pairNumber;
-        logoutBtn.onclick = logout;
-        phone.onkeypress = (e) => {
+        // ============ Event Listeners ============
+        pairBtn.addEventListener('click', pairNumber);
+        logoutBtn.addEventListener('click', logout);
+        phone.addEventListener('keypress', (e) => {
             if (e.key === 'Enter') pairNumber();
-        };
+        });
 
+        // ============ Start ============
         fetchStatus();
         setInterval(fetchStatus, 3000);
+        
+        console.log('Page loaded!');
+        console.log('Pair button:', pairBtn);
     </script>
 </body>
 </html>`);
@@ -221,28 +233,34 @@ app.get('/status', (req, res) => {
 });
 
 app.post('/pair', async (req, res) => {
+    console.log('📱 Pair request received');
+    console.log('Body:', req.body);
+    
     const { phone } = req.body;
-    console.log('Pair request received for:', phone);
     
     if (!phone) {
+        console.log('❌ No phone number');
         return res.json({ success: false, error: 'Phone number required' });
     }
     
     try {
         if (!sock) {
+            console.log('❌ Socket not ready');
             return res.json({ success: false, error: 'Bot not initialized' });
         }
         
         if (!isReady) {
+            console.log('❌ Bot not ready');
             return res.json({ success: false, error: 'Bot is connecting... Wait 10 seconds' });
         }
         
+        console.log(`📱 Sending code to ${phone}...`);
         const code = await sock.requestPairingCode(phone);
-        console.log(`✅ Pairing code sent to ${phone}: ${code}`);
+        console.log(`✅ Code sent: ${code}`);
         res.json({ success: true, code: code });
         
     } catch (error) {
-        console.error('Pair error:', error);
+        console.error('❌ Pair error:', error);
         res.json({ success: false, error: error.message || 'Pairing failed' });
     }
 });
@@ -278,13 +296,13 @@ async function startBot() {
             logger: Pino({ level: 'silent' }),
             auth: state,
             printQRInTerminal: false,
-            browser: ['Muzammil MD', 'Chrome', '1.0'],
-            connectTimeoutMs: 30000,
-            defaultQueryTimeoutMs: 30000
+            browser: ['Muzammil MD', 'Chrome', '1.0']
         });
 
         sock.ev.on('connection.update', async (update) => {
             const { connection, lastDisconnect } = update;
+            
+            console.log('Connection update:', connection);
             
             if (connection === 'open') {
                 isConnected = true;
@@ -297,6 +315,7 @@ async function startBot() {
                 isConnected = false;
                 isReady = false;
                 const statusCode = lastDisconnect?.error?.output?.statusCode;
+                console.log('Connection closed, statusCode:', statusCode);
                 
                 if (statusCode === 401) {
                     console.log('❌ Session expired');
