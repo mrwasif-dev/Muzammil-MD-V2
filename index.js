@@ -22,7 +22,7 @@ let botMode = 'public';
 let isConnected = false;
 let pairingCode = null;
 
-// ============ HTML (Built-in) ============
+// ============ HTML PAGE ============
 const HTML_PAGE = `<!DOCTYPE html>
 <html>
 <head>
@@ -198,6 +198,16 @@ const HTML_PAGE = `<!DOCTYPE html>
             .mode-control { flex-direction: column; }
             .input-group { flex-direction: column; }
         }
+        .error-msg {
+            color: #ff6b6b;
+            font-size: 13px;
+            margin-top: 10px;
+            padding: 10px;
+            background: rgba(255,0,0,0.1);
+            border-radius: 8px;
+            display: none;
+        }
+        .error-msg.show { display: block; }
     </style>
 </head>
 <body>
@@ -231,6 +241,7 @@ const HTML_PAGE = `<!DOCTYPE html>
                 <div class="qr-placeholder">📱 Waiting for QR Code...</div>
             </div>
         </div>
+        <div id="errorMsg" class="error-msg"></div>
         <div class="pairing-box">
             <h3>📱 Pair with Phone Number</h3>
             <div class="input-group">
@@ -273,6 +284,7 @@ const HTML_PAGE = `<!DOCTYPE html>
         const setPublicBtn = document.getElementById('setPublicBtn');
         const setPrivateBtn = document.getElementById('setPrivateBtn');
         const toast = document.getElementById('toast');
+        const errorMsg = document.getElementById('errorMsg');
         let toastTimeout = null;
 
         function showToast(message, type = 'success') {
@@ -280,6 +292,12 @@ const HTML_PAGE = `<!DOCTYPE html>
             toast.className = 'toast show ' + type;
             clearTimeout(toastTimeout);
             toastTimeout = setTimeout(() => { toast.className = 'toast'; }, 4000);
+        }
+
+        function showError(message) {
+            errorMsg.textContent = '⚠️ ' + message;
+            errorMsg.className = 'error-msg show';
+            setTimeout(() => { errorMsg.className = 'error-msg'; }, 8000);
         }
 
         function updateUI(data) {
@@ -320,7 +338,10 @@ const HTML_PAGE = `<!DOCTYPE html>
                 const response = await fetch('/status');
                 const data = await response.json();
                 updateUI(data);
-            } catch (error) { console.error(error); }
+            } catch (error) {
+                console.error(error);
+                showError('Cannot connect to server');
+            }
         }
 
         async function fetchQR() {
@@ -334,12 +355,18 @@ const HTML_PAGE = `<!DOCTYPE html>
                     pairCode.textContent = data.pairingCode;
                     pairCodeDisplay.className = 'pair-code-display show';
                 }
-            } catch (error) { console.error(error); }
+            } catch (error) {
+                console.error(error);
+            }
         }
 
         async function pairNumber() {
             const phone = phoneInput.value.trim();
             if (!phone) { showToast('Please enter a phone number!', 'error'); return; }
+            if (!/^[0-9]{10,15}$/.test(phone)) {
+                showToast('Invalid number! Use format: 923001234567', 'error');
+                return;
+            }
             pairBtn.disabled = true;
             pairBtn.textContent = '⏳ Pairing...';
             try {
@@ -350,16 +377,18 @@ const HTML_PAGE = `<!DOCTYPE html>
                 });
                 const data = await response.json();
                 if (data.success) {
-                    showToast('✅ Pairing code sent to ' + phone, 'success');
+                    showToast('✅ Code sent! Check WhatsApp', 'success');
                     if (data.code) {
                         pairCode.textContent = data.code;
                         pairCodeDisplay.className = 'pair-code-display show';
                     }
                 } else {
                     showToast('❌ ' + data.error, 'error');
+                    showError(data.error);
                 }
             } catch (error) {
                 showToast('❌ Error pairing!', 'error');
+                showError('Server error: ' + error.message);
             }
             pairBtn.disabled = false;
             pairBtn.textContent = 'Pair';
@@ -435,6 +464,7 @@ app.post('/setmode', (req, res) => {
     if (mode === 'public' || mode === 'private') {
         botMode = mode;
         res.json({ success: true, mode: botMode });
+        console.log(`📌 Mode changed to: ${botMode}`);
     } else {
         res.json({ success: false, error: 'Invalid mode' });
     }
@@ -442,26 +472,41 @@ app.post('/setmode', (req, res) => {
 
 app.post('/pair', async (req, res) => {
     const { phone } = req.body;
-    if (!phone) return res.json({ success: false, error: 'Phone required' });
+    if (!phone) {
+        return res.json({ success: false, error: 'Phone number required' });
+    }
+    
     try {
-        if (!sock) return res.json({ success: false, error: 'Bot not ready' });
+        if (!sock) {
+            return res.json({ success: false, error: 'Bot is not ready. Wait for connection...' });
+        }
+        
+        console.log(`📱 Attempting to pair with: ${phone}`);
         const code = await sock.requestPairingCode(phone);
         pairingCode = code;
+        console.log(`✅ Pairing code sent to ${phone}: ${code}`);
         res.json({ success: true, code: code });
     } catch (error) {
-        res.json({ success: false, error: error.message });
+        console.error('Pairing error:', error);
+        res.json({ success: false, error: error.message || 'Pairing failed' });
     }
 });
 
 app.post('/logout', (req, res) => {
     try {
-        if (sock) sock.end();
-        if (fs.existsSync('session')) fs.rmSync('session', { recursive: true, force: true });
+        if (sock) {
+            sock.end();
+            sock = null;
+        }
+        if (fs.existsSync('session')) {
+            fs.rmSync('session', { recursive: true, force: true });
+        }
         isConnected = false;
         botStatus = 'Disconnected';
         qrCode = null;
         pairingCode = null;
         res.json({ success: true });
+        console.log('👋 Logged out successfully');
     } catch (error) {
         res.json({ success: false, error: error.message });
     }
@@ -469,13 +514,16 @@ app.post('/logout', (req, res) => {
 
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`🌐 Server: http://0.0.0.0:${PORT}`);
+    console.log(`🤖 ${BOT_NAME} is starting...`);
 });
 
 // ============ WHATSAPP BOT ============
 async function startBot() {
     try {
+        // Delete old session on fresh start
         if (fs.existsSync('session')) {
             fs.rmSync('session', { recursive: true, force: true });
+            console.log('🗑️ Removed old session');
         }
 
         const { state, saveCreds } = await useMultiFileAuthState('session');
@@ -485,9 +533,10 @@ async function startBot() {
             auth: state,
             printQRInTerminal: false,
             browser: ['Muzammil MD', 'Chrome', '1.0.0'],
-            connectTimeoutMs: 30000,
-            defaultQueryTimeoutMs: 30000,
-            keepAliveIntervalMs: 30000
+            connectTimeoutMs: 60000,
+            defaultQueryTimeoutMs: 60000,
+            keepAliveIntervalMs: 30000,
+            getMessage: async () => { return null; }
         });
 
         sock.ev.on('connection.update', async (update) => {
@@ -505,7 +554,9 @@ async function startBot() {
                 qrCode = null;
                 pairingCode = null;
                 console.log(`✅ ${BOT_NAME} Connected!`);
-                console.log(`👤 ${sock.user?.name}`);
+                console.log(`👤 Logged in as: ${sock.user?.name || 'Unknown'}`);
+                console.log(`📌 Mode: ${botMode}`);
+                console.log(`👑 Owner: ${OWNER_NUMBER}`);
             }
             
             if (connection === 'close') {
@@ -514,7 +565,9 @@ async function startBot() {
                 const statusCode = lastDisconnect?.error?.output?.statusCode;
                 if (statusCode === 401) {
                     console.log('❌ Session expired');
-                    if (fs.existsSync('session')) fs.rmSync('session', { recursive: true, force: true });
+                    if (fs.existsSync('session')) {
+                        fs.rmSync('session', { recursive: true, force: true });
+                    }
                     setTimeout(() => process.exit(0), 2000);
                 } else {
                     console.log('🔄 Reconnecting...');
@@ -536,16 +589,18 @@ async function startBot() {
             let text = msg.message?.conversation || 
                       msg.message?.extendedTextMessage?.text || '';
 
-            const isOwner = sender === OWNER_NUMBER + '@s.whatsapp.net';
-            
-            // Private Mode
+            const isOwner = sender === OWNER_NUMBER + '@s.whatsapp.net' || 
+                           sender === ADMIN_NUMBER + '@s.whatsapp.net';
+
+            // ============ PRIVATE MODE ============
             if (botMode === 'private' && !isOwner) {
                 await sock.sendMessage(from, {
-                    text: `🔒 Private Mode\nOnly Owner can use.\nContact: wa.me/${OWNER_NUMBER}`
+                    text: `🔒 *${BOT_NAME} is in Private Mode*\n\nOnly Owner/Admin can use this bot.\nContact: wa.me/${OWNER_NUMBER}`
                 });
                 return;
             }
 
+            // ============ COMMANDS ============
             if (text.startsWith(PREFIX)) {
                 const args = text.slice(PREFIX.length).trim().split(/ +/);
                 const command = args.shift().toLowerCase();
@@ -555,46 +610,58 @@ async function startBot() {
                 }
                 else if (command === 'info') {
                     await sock.sendMessage(from, {
-                        text: `🤖 *${BOT_NAME}*\n👑 Owner: ${OWNER_NUMBER}\n📊 Mode: ${botMode.toUpperCase()}\n✍️ Prowed By: Wasif Ali`
+                        text: `🤖 *${BOT_NAME}*\n\n` +
+                              `📌 Version: 2.0.0\n` +
+                              `👑 Owner: ${OWNER_NUMBER}\n` +
+                              `📱 Admin: ${ADMIN_NUMBER}\n` +
+                              `📊 Mode: ${botMode.toUpperCase()}\n` +
+                              `📡 Status: Online\n\n` +
+                              `✍️ *Prowed By: Wasif Ali*`
                     });
                 }
                 else if (command === 'mode') {
-                    await sock.sendMessage(from, { text: `📌 Mode: ${botMode.toUpperCase()}` });
+                    await sock.sendMessage(from, { 
+                        text: `📌 *Current Mode*\n\n🔹 ${botMode.toUpperCase()}\n\n${botMode === 'public' ? '🌍 Everyone can use' : '🔒 Only Owner/Admin'}`
+                    });
                 }
                 else if (command === 'setmode') {
                     if (!isOwner) {
-                        await sock.sendMessage(from, { text: '❌ Only owner!' });
+                        await sock.sendMessage(from, { text: '❌ Only owner can change mode!' });
                         return;
                     }
                     const mode = args[0]?.toLowerCase();
                     if (mode === 'public' || mode === 'private') {
                         botMode = mode;
-                        await sock.sendMessage(from, { text: `✅ Mode: ${mode.toUpperCase()}` });
+                        await sock.sendMessage(from, { text: `✅ Mode changed to: *${mode.toUpperCase()}*` });
+                        console.log(`📌 Mode changed to: ${mode}`);
                     } else {
-                        await sock.sendMessage(from, { text: '❌ Use: public/private' });
+                        await sock.sendMessage(from, { text: '❌ Use: public or private' });
                     }
                 }
                 else if (command === 'owner') {
                     await sock.sendMessage(from, {
-                        text: `👑 Owner\n📱 ${OWNER_NUMBER}\n💬 wa.me/${OWNER_NUMBER}\n✍️ Prowed By: Wasif Ali`
+                        text: `👑 *Owner*\n\n📱 ${OWNER_NUMBER}\n💬 Contact: wa.me/${OWNER_NUMBER}\n\n✍️ *Prowed By: Wasif Ali*`
                     });
                 }
                 else if (command === 'help') {
-                    let help = `🤖 *${BOT_NAME}*\n\n`;
-                    help += `${PREFIX}ping - Check bot\n`;
-                    help += `${PREFIX}info - Bot info\n`;
-                    help += `${PREFIX}mode - Check mode\n`;
-                    help += `${PREFIX}owner - Contact owner\n`;
-                    help += `${PREFIX}help - This menu\n`;
+                    let helpText = `🤖 *${BOT_NAME}* - Help Menu\n\n`;
+                    helpText += `📌 *Commands*\n`;
+                    helpText += `${PREFIX}ping - Check bot\n`;
+                    helpText += `${PREFIX}info - Bot info\n`;
+                    helpText += `${PREFIX}mode - Check mode\n`;
+                    helpText += `${PREFIX}owner - Contact owner\n`;
+                    helpText += `${PREFIX}help - Show this menu\n\n`;
                     if (isOwner) {
-                        help += `\n👑 Owner:\n${PREFIX}setmode public/private\n${PREFIX}restart`;
+                        helpText += `👑 *Owner Commands*\n`;
+                        helpText += `${PREFIX}setmode public/private - Change mode\n`;
+                        helpText += `${PREFIX}restart - Restart bot\n`;
                     }
-                    help += `\n\n✍️ Prowed By: Wasif Ali`;
-                    await sock.sendMessage(from, { text: help });
+                    helpText += `\n✍️ *Prowed By: Wasif Ali*`;
+                    await sock.sendMessage(from, { text: helpText });
                 }
                 else if (command === 'restart') {
                     if (!isOwner) {
-                        await sock.sendMessage(from, { text: '❌ Only owner!' });
+                        await sock.sendMessage(from, { text: '❌ Only owner can restart!' });
                         return;
                     }
                     await sock.sendMessage(from, { text: '🔄 Restarting...' });
@@ -602,23 +669,31 @@ async function startBot() {
                 }
                 else {
                     await sock.sendMessage(from, {
-                        text: `❌ Unknown! Use ${PREFIX}help`
+                        text: `❌ Unknown command!\nUse ${PREFIX}help for commands.`
                     });
                 }
             }
         });
 
     } catch (error) {
-        console.error('❌ Error:', error);
+        console.error('❌ Bot Error:', error);
         setTimeout(startBot, 5000);
     }
 }
 
-console.log(`🤖 ${BOT_NAME}`);
+console.log(`🤖 ${BOT_NAME} is running...`);
 console.log(`👑 Owner: ${OWNER_NUMBER}`);
+console.log(`📱 Admin: ${ADMIN_NUMBER}`);
 console.log(`📌 Mode: ${botMode}`);
+console.log(`🌐 Open your Heroku URL`);
 
 startBot();
 
-process.on('unhandledRejection', (error) => console.error(error));
-process.on('SIGTERM', () => process.exit(0));
+process.on('unhandledRejection', (error) => {
+    console.error('Unhandled Rejection:', error);
+});
+
+process.on('SIGTERM', () => {
+    console.log('🛑 Bot terminated');
+    process.exit(0);
+});
