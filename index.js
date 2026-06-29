@@ -1,5 +1,5 @@
 const express = require('express');
-const { default: makeWASocket, useMultiFileAuthState } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
 const Pino = require('pino');
 
 const app = express();
@@ -177,25 +177,29 @@ app.post('/pair', async (req, res) => {
     if (!phone) return res.json({ success: false, error: 'Phone required' });
     try {
         if (!sock || !isReady) {
-            return res.json({ success: false, error: 'Wait...' });
+            return res.json({ success: false, error: 'Wait for connection...' });
         }
         const code = await sock.requestPairingCode(phone);
         console.log(`📱 Code sent to ${phone}: ${code}`);
         res.json({ success: true, code });
-    } catch (e) {
+    } catch (error) {
+        console.error('Pair error:', error);
         res.json({ success: false, error: 'Try again' });
     }
 });
 
-app.post('/logout', (req, res) => {
+app.post('/logout', async (req, res) => {
     try {
-        if (sock) sock.end();
+        if (sock) {
+            await sock.logout();  // ✅ صحیح طریقہ
+        }
         isConnected = false;
         isReady = false;
         sock = null;
         res.json({ success: true });
-    } catch (e) {
-        res.json({ success: false, error: e.message });
+        console.log('👋 Logged out');
+    } catch (error) {
+        res.json({ success: false, error: error.message });
     }
 });
 
@@ -212,23 +216,27 @@ async function startBot() {
             logger: Pino({ level: 'silent' }),
             auth: state,
             printQRInTerminal: false,
-            browser: ['Muzammil MD', 'Chrome', '1.0.0']
+            browser: ['Muzammil MD', 'Chrome', '1.0']  // ✅ صحیح
         });
 
         sock.ev.on('connection.update', async (update) => {
             const { connection, lastDisconnect } = update;
+            
             if (connection === 'open') {
                 isConnected = true;
                 isReady = true;
                 console.log('✅ Connected!');
                 console.log(`👤 ${sock.user?.name}`);
             }
+            
             if (connection === 'close') {
                 isConnected = false;
                 isReady = false;
-                if (lastDisconnect?.error?.output?.statusCode === 401) {
+                const statusCode = lastDisconnect?.error?.output?.statusCode;
+                if (statusCode === 401) {
                     console.log('❌ Session expired');
-                    process.exit(0);
+                    // ✅ process.exit نہیں، دوبارہ start
+                    setTimeout(startBot, 3000);
                 } else {
                     console.log('🔄 Reconnecting...');
                     setTimeout(startBot, 5000);
@@ -241,15 +249,23 @@ async function startBot() {
         // Commands
         sock.ev.on('messages.upsert', async (m) => {
             const msg = m.messages[0];
-            if (!msg.message) return;
+            if (!msg.message || msg.key.fromMe) return;  // ✅ خود کا میسج نظر انداز
+            
             const from = msg.key.remoteJid;
             const text = msg.message?.conversation || msg.message?.extendedTextMessage?.text || '';
-            if (text === '.ping') await sock.sendMessage(from, { text: '🏓 Pong!' });
-            if (text === '.info') await sock.sendMessage(from, { text: '🤖 Muzammil MD\n✍️ Prowed By: Wasif Ali' });
+            
+            if (text === '.ping') {
+                await sock.sendMessage(from, { text: '🏓 Pong!' });
+            }
+            if (text === '.info') {
+                await sock.sendMessage(from, { 
+                    text: '🤖 Muzammil MD\n✍️ Prowed By: Wasif Ali'
+                });
+            }
         });
 
-    } catch (e) {
-        console.error('❌ Error:', e);
+    } catch (error) {
+        console.error('❌ Error:', error);
         setTimeout(startBot, 5000);
     }
 }
