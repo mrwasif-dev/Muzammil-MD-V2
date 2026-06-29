@@ -1,5 +1,5 @@
-const express = require('express');
-const { default: makeWASocket, useMultiFileAuthState } = require('@whiskeysockets/baileys');
+const express = require('express'); // 1. ٹھیک کر دیا (const چھوٹے حروف میں)
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
 const Pino = require('pino');
 
 const app = express();
@@ -8,6 +8,7 @@ const PORT = process.env.PORT || 3000;
 let sock = null;
 let isReady = false;
 let isConnected = false;
+let pairingCode = null; // کوڈ محفوظ رکھنے کے لیے نیا ویری ایبل
 
 app.use(express.json());
 
@@ -86,7 +87,6 @@ app.get('/', (req, res) => {
     <div class="toast" id="toast"></div>
 
     <script>
-        // ============ DOM Elements ============
         const dot = document.getElementById('dot');
         const statusEl = document.getElementById('status');
         const phone = document.getElementById('phone');
@@ -97,7 +97,6 @@ app.get('/', (req, res) => {
         const toast = document.getElementById('toast');
         let toastTimeout = null;
 
-        // ============ Toast ============
         function showToast(msg, type = 'success') {
             toast.textContent = msg;
             toast.className = 'toast show ' + type;
@@ -107,13 +106,11 @@ app.get('/', (req, res) => {
             }, 4000);
         }
 
-        // ============ Update Status ============
         function updateStatus(data) {
-            console.log('Status:', data);
             if (data.connected) {
                 statusEl.textContent = '✅ Connected';
                 dot.className = 'dot online';
-                pairBtn.disabled = false;
+                pairBtn.disabled = true; // کنیکٹ ہونے کے بعد بٹن ڈس ایبل کر دیں
             } else if (data.ready) {
                 statusEl.textContent = '🟢 Ready to Pair';
                 dot.className = 'dot ready';
@@ -131,7 +128,6 @@ app.get('/', (req, res) => {
             }
         }
 
-        // ============ Fetch Status ============
         async function fetchStatus() {
             try {
                 const res = await fetch('/status');
@@ -142,12 +138,8 @@ app.get('/', (req, res) => {
             }
         }
 
-        // ============ Pair Function ============
         async function pairNumber() {
-            console.log('Pair button clicked!');
             const num = phone.value.trim();
-            console.log('Phone number:', num);
-            
             if (!num) {
                 showToast('Please enter phone number!', 'error');
                 return;
@@ -161,18 +153,13 @@ app.get('/', (req, res) => {
             pairBtn.textContent = '⏳ Sending...';
             
             try {
-                console.log('Sending pair request...');
                 const res = await fetch('/pair', {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
+                    headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ phone: num })
                 });
                 
                 const data = await res.json();
-                console.log('Response:', data);
-                
                 if (data.success) {
                     showToast('✅ Code sent! Check WhatsApp', 'success');
                     if (data.code) {
@@ -183,7 +170,6 @@ app.get('/', (req, res) => {
                     showToast('❌ ' + data.error, 'error');
                 }
             } catch (error) {
-                console.error('Pair error:', error);
                 showToast('❌ Error: ' + error.message, 'error');
             }
             
@@ -191,7 +177,6 @@ app.get('/', (req, res) => {
             pairBtn.textContent = 'Pair';
         }
 
-        // ============ Logout ============
         async function logout() {
             if (!confirm('Logout?')) return;
             try {
@@ -206,19 +191,14 @@ app.get('/', (req, res) => {
             }
         }
 
-        // ============ Event Listeners ============
         pairBtn.addEventListener('click', pairNumber);
         logoutBtn.addEventListener('click', logout);
         phone.addEventListener('keypress', (e) => {
             if (e.key === 'Enter') pairNumber();
         });
 
-        // ============ Start ============
         fetchStatus();
         setInterval(fetchStatus, 3000);
-        
-        console.log('Page loaded!');
-        console.log('Pair button:', pairBtn);
     </script>
 </body>
 </html>`);
@@ -228,35 +208,31 @@ app.get('/', (req, res) => {
 app.get('/status', (req, res) => {
     res.json({ 
         connected: isConnected, 
-        ready: isReady 
+        ready: isReady,
+        code: pairingCode // فرنٹ اینڈ کو ہر 3 سیکنڈ بعد تازہ ترین کوڈ ملے گا
     });
 });
 
 app.post('/pair', async (req, res) => {
-    console.log('📱 Pair request received');
-    console.log('Body:', req.body);
-    
     const { phone } = req.body;
     
     if (!phone) {
-        console.log('❌ No phone number');
         return res.json({ success: false, error: 'Phone number required' });
     }
     
     try {
-        if (!sock) {
-            console.log('❌ Socket not ready');
-            return res.json({ success: false, error: 'Bot not initialized' });
+        if (!sock || !isReady) {
+            return res.json({ success: false, error: 'Bot is initializing... Please wait.' });
         }
         
-        if (!isReady) {
-            console.log('❌ Bot not ready');
-            return res.json({ success: false, error: 'Bot is connecting... Wait 10 seconds' });
+        if (isConnected) {
+            return res.json({ success: false, error: 'Bot is already connected!' });
         }
         
-        console.log(`📱 Sending code to ${phone}...`);
+        console.log(`📱 Requesting pairing code for ${phone}...`);
         const code = await sock.requestPairingCode(phone);
-        console.log(`✅ Code sent: ${code}`);
+        pairingCode = code; // گلوبل ویری ایبل میں محفوظ کیا
+        
         res.json({ success: true, code: code });
         
     } catch (error) {
@@ -271,8 +247,7 @@ app.post('/logout', async (req, res) => {
             await sock.logout();
         }
         isConnected = false;
-        isReady = false;
-        sock = null;
+        pairingCode = null;
         res.json({ success: true });
         console.log('👋 Logged out');
     } catch (error) {
@@ -284,7 +259,6 @@ app.post('/logout', async (req, res) => {
 // ============ SERVER ============
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`🌐 Server: http://0.0.0.0:${PORT}`);
-    console.log('🤖 Muzammil MD');
 });
 
 // ============ WHATSAPP BOT ============
@@ -299,30 +273,29 @@ async function startBot() {
             browser: ['Muzammil MD', 'Chrome', '1.0']
         });
 
+        // جیسے ہی بوٹ کا بیسک فنکشن رن ہو جائے، اسے پیئرنگ کے لیے ریڈی (true) کر دیں
+        isReady = true;
+
         sock.ev.on('connection.update', async (update) => {
             const { connection, lastDisconnect } = update;
             
-            console.log('Connection update:', connection);
-            
             if (connection === 'open') {
                 isConnected = true;
-                isReady = true;
+                pairingCode = null; // کنیکٹ ہونے پر پرانا کوڈ صاف کر دیں
                 console.log('✅ Connected!');
-                console.log(`👤 ${sock.user?.name}`);
             }
             
             if (connection === 'close') {
                 isConnected = false;
-                isReady = false;
                 const statusCode = lastDisconnect?.error?.output?.statusCode;
-                console.log('Connection closed, statusCode:', statusCode);
                 
-                if (statusCode === 401) {
-                    console.log('❌ Session expired');
-                    setTimeout(startBot, 3000);
-                } else {
+                // Baileys میں درست طریقے سے ری-کنیکٹ لاجک
+                if (statusCode !== DisconnectReason.loggedOut) {
                     console.log('🔄 Reconnecting...');
                     setTimeout(startBot, 5000);
+                } else {
+                    console.log('❌ Session logged out. Clear session folder.');
+                    pairingCode = null;
                 }
             }
         });
@@ -355,5 +328,4 @@ async function startBot() {
     }
 }
 
-console.log('👑 Owner: 923039107958');
 startBot();
